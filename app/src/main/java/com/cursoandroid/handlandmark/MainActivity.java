@@ -1,6 +1,8 @@
 package com.cursoandroid.handlandmark;
 
+import android.content.Context;
 import android.graphics.Bitmap;
+import android.graphics.Camera;
 import android.graphics.ImageDecoder;
 import android.net.Uri;
 import android.os.Build;
@@ -13,12 +15,22 @@ import android.widget.TextView;
 import androidx.activity.EdgeToEdge;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.PickVisualMediaRequest;
-import androidx.activity.result.contract.ActivityResultContracts;
+import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.camera.core.CameraInfo;
+import androidx.camera.core.CameraInfoUnavailableException;
+import androidx.camera.core.CameraProvider;
+import androidx.camera.core.CameraSelector;
+import androidx.camera.core.Preview;
+import androidx.camera.view.PreviewView;
+import androidx.core.content.ContextCompat;
+import androidx.core.content.FileProvider;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 
+import com.cursoandroid.handlandmark.databinding.ActivityMainBinding;
+import com.google.common.util.concurrent.ListenableFuture;
 import com.google.mediapipe.framework.image.BitmapImageBuilder;
 import com.google.mediapipe.framework.image.MPImage;
 import com.google.mediapipe.tasks.components.containers.NormalizedLandmark;
@@ -27,6 +39,7 @@ import com.google.mediapipe.tasks.vision.core.RunningMode;
 import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarker;
 import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarkerResult;
 
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
@@ -34,7 +47,13 @@ import java.nio.FloatBuffer;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.ExecutionException;
+import java.util.zip.Inflater;
 
+import androidx.camera.lifecycle.ProcessCameraProvider;
+import androidx.lifecycle.LifecycleOwner;
+
+import com.google.common.util.concurrent.ListenableFuture;
 import ai.onnxruntime.*;
 
 public class MainActivity extends AppCompatActivity {
@@ -44,14 +63,18 @@ public class MainActivity extends AppCompatActivity {
     private BaseOptions baseOptions = baseOptionsBuilder.build();
     private HandLandmarker.HandLandmarkerOptions options = HandLandmarker.HandLandmarkerOptions.builder()
             .setBaseOptions(baseOptions)
+            .setNumHands(1)
             .setMinHandDetectionConfidence(0.55f)
             .setMinHandPresenceConfidence(0.55f)
             .setRunningMode(RunningMode.IMAGE)
             .build();
     private Button button;
     private TextView textView;
-    private TextView textView2;
     private ActivityResultLauncher<PickVisualMediaRequest> mpImage;
+    private ActivityMainBinding viewBinding;
+    private PreviewView previewView;
+
+
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -67,11 +90,11 @@ public class MainActivity extends AppCompatActivity {
         HandLandmarker handLandmarker = HandLandmarker.createFromOptions(this, options);
         button = findViewById(R.id.button);
         textView = findViewById(R.id.textView);
-        textView2 = findViewById(R.id.textView2);
 
-        button.setOnClickListener(v -> abrirMidia());
 
-        mpImage = registerForActivityResult(new ActivityResultContracts.PickVisualMedia(), uri -> {
+
+        Camera camera =
+        /*
             if (uri != null) {
                 Bitmap bitmap = uriParaBitmap(uri);
                 MPImage mpImg = new BitmapImageBuilder(bitmap).build();
@@ -114,24 +137,9 @@ public class MainActivity extends AppCompatActivity {
                     result.close();
                     session.close();
 
-                } catch (OrtException e) {
-                    Log.e("ONNX", "Erro ao processar o modelo: " + e.getMessage(), e);
-                } catch (IOException e) {
-                    Log.e("ONNX", "Erro ao carregar o modelo: " + e.getMessage(), e);
-                } catch (Exception e) {
-                    Log.e("ONNX", "Erro inesperado: " + e.getMessage(), e);
                 }
-            } else {
-                Log.e("Imagem", "Imagem não selecionada");
-            }
-        });
+        });*/
 
-    }
-
-    private void abrirMidia() {
-        mpImage.launch(new PickVisualMediaRequest.Builder()
-                .setMediaType(ActivityResultContracts.PickVisualMedia.ImageOnly.INSTANCE)
-                .build());
     }
 
     private Bitmap uriParaBitmap(Uri uri) {
@@ -164,6 +172,15 @@ public class MainActivity extends AppCompatActivity {
         byteBuffer.rewind();
 
         return byteBuffer;
+    }
+    private void bindPreview(@NonNull ProcessCameraProvider processCameraProvider){
+        Preview preview = new Preview.Builder()
+                .build();
+        CameraSelector cameraSelector = new CameraSelector.Builder()
+                .requireLensFacing(CameraSelector.LENS_FACING_BACK)
+                .build();
+        preview.setSurfaceProvider(previewView.getSurfaceProvider());
+        Camera camera = (Camera) processCameraProvider.bindToLifecycle((LifecycleOwner)this, cameraSelector, preview);
     }
 
 }
