@@ -1,35 +1,25 @@
 package com.cursoandroid.handlandmark;
-
-import android.content.Context;
+import android.Manifest;
+import android.annotation.SuppressLint;
+import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
-import android.graphics.Camera;
-import android.graphics.ImageDecoder;
-import android.net.Uri;
-import android.os.Build;
+import android.graphics.BitmapFactory;
 import android.os.Bundle;
-import android.provider.MediaStore;
 import android.util.Log;
-import android.widget.Button;
+import android.view.View;
+import android.widget.ImageButton;
 import android.widget.TextView;
-
 import androidx.activity.EdgeToEdge;
+import androidx.activity.result.ActivityResultCallback;
 import androidx.activity.result.ActivityResultLauncher;
-import androidx.activity.result.PickVisualMediaRequest;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
-import androidx.camera.core.CameraInfo;
-import androidx.camera.core.CameraInfoUnavailableException;
-import androidx.camera.core.CameraProvider;
-import androidx.camera.core.CameraSelector;
-import androidx.camera.core.Preview;
+import androidx.camera.core.*;
+import androidx.camera.lifecycle.ProcessCameraProvider;
 import androidx.camera.view.PreviewView;
 import androidx.core.content.ContextCompat;
-import androidx.core.content.FileProvider;
-import androidx.core.graphics.Insets;
-import androidx.core.view.ViewCompat;
-import androidx.core.view.WindowInsetsCompat;
-
-import com.cursoandroid.handlandmark.databinding.ActivityMainBinding;
+import androidx.lifecycle.LifecycleOwner;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.mediapipe.framework.image.BitmapImageBuilder;
 import com.google.mediapipe.framework.image.MPImage;
@@ -38,149 +28,174 @@ import com.google.mediapipe.tasks.core.BaseOptions;
 import com.google.mediapipe.tasks.vision.core.RunningMode;
 import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarker;
 import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarkerResult;
-
-import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.FloatBuffer;
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
-import java.util.zip.Inflater;
 
-import androidx.camera.lifecycle.ProcessCameraProvider;
-import androidx.lifecycle.LifecycleOwner;
-
-import com.google.common.util.concurrent.ListenableFuture;
 import ai.onnxruntime.*;
 
 public class MainActivity extends AppCompatActivity {
 
+    private ImageButton tirarFoto, flash, virarCamera;
+    private TextView textView;
+    private PreviewView previewView;
+    private int cameraFacing = CameraSelector.LENS_FACING_BACK;
+    private OrtEnvironment ortEnvironment;
+    private OrtSession.SessionOptions sessionOptions;
+    private ByteBuffer modelBuffer;
+    private ImageCapture imageCapture;
     private BaseOptions.Builder baseOptionsBuilder = BaseOptions.builder()
             .setModelAssetPath("hand_landmarker.task");
     private BaseOptions baseOptions = baseOptionsBuilder.build();
     private HandLandmarker.HandLandmarkerOptions options = HandLandmarker.HandLandmarkerOptions.builder()
             .setBaseOptions(baseOptions)
-            .setNumHands(1)
             .setMinHandDetectionConfidence(0.55f)
             .setMinHandPresenceConfidence(0.55f)
             .setRunningMode(RunningMode.IMAGE)
             .build();
-    private Button button;
-    private TextView textView;
-    private ActivityResultLauncher<PickVisualMediaRequest> mpImage;
-    private ActivityMainBinding viewBinding;
-    private PreviewView previewView;
 
+    private final ActivityResultLauncher<String> activityResultLauncher = registerForActivityResult(
+            new ActivityResultContracts.RequestPermission(),
+            new ActivityResultCallback<Boolean>() {
+                @Override
+                public void onActivityResult(Boolean granted) {
+                    if (granted) {
+                        startCamera(cameraFacing);
+                    }
+                }
+            });
+    private HandLandmarker handLandmark;
 
-
+    @SuppressLint("MissingInflatedId")
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         EdgeToEdge.enable(this);
         setContentView(R.layout.activity_main);
-        ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.main), (v, insets) -> {
-            Insets systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
-            v.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom);
-            return insets;
+
+        previewView = findViewById(R.id.previewView);
+        tirarFoto = findViewById(R.id.tirar_foto);
+        flash = findViewById(R.id.flash);
+        virarCamera = findViewById(R.id.virar_camera);
+        textView = findViewById(R.id.textView);
+        handLandmark = HandLandmarker.createFromOptions(this, options);
+
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            activityResultLauncher.launch(Manifest.permission.CAMERA);
+        } else {
+            startCamera(cameraFacing);
+        }
+
+        virarCamera.setOnClickListener(v -> {
+            cameraFacing = (cameraFacing == CameraSelector.LENS_FACING_BACK) ?
+                    CameraSelector.LENS_FACING_FRONT : CameraSelector.LENS_FACING_BACK;
+            startCamera(cameraFacing);
         });
 
-        HandLandmarker handLandmarker = HandLandmarker.createFromOptions(this, options);
-        button = findViewById(R.id.button);
-        textView = findViewById(R.id.textView);
+        try {
+            ortEnvironment = OrtEnvironment.getEnvironment();
+            sessionOptions = new OrtSession.SessionOptions();
+            modelBuffer = loadModelFile("modelo_rf.onnx");
+        } catch (IOException e) {
+            Log.e("ONNX", "Erro ao carregar o modelo", e);
+            return;
+        }
 
+        tirarFoto.setOnClickListener(v -> capturarFoto());
 
+        flash.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
 
-        Camera camera =
-        /*
-            if (uri != null) {
-                Bitmap bitmap = uriParaBitmap(uri);
-                MPImage mpImg = new BitmapImageBuilder(bitmap).build();
-                HandLandmarkerResult resultado = handLandmarker.detect(mpImg);
-                List<Float> lista = new ArrayList<>();
-                if (!resultado.landmarks().isEmpty()) {
-                    for (List<NormalizedLandmark> l : resultado.landmarks()) {
-                        for (NormalizedLandmark landmark : l) {
-                            lista.add(landmark.x());
-                            lista.add(landmark.y());
-                        }
-                    }
-                }
-                float[] vet = new float[lista.size()];
-                int p = 0;
-                for (float i : lista) {
-                    vet[p++] = i;
-                }
-
-                try {
-                    OrtEnvironment ortEnvironment = OrtEnvironment.getEnvironment();
-                    OrtSession.SessionOptions sessionOptions = new OrtSession.SessionOptions();
-                    ByteBuffer modelBuffer = loadModelFile("modelo_rf.onnx");
-                    OrtSession session = ortEnvironment.createSession(modelBuffer, sessionOptions); //[rotulo, propabilidade]
-                    OnnxTensor tensor = OnnxTensor.createTensor(ortEnvironment, FloatBuffer.wrap(vet), new long[]{1, 42});
-                    OrtSession.Result result = session.run(Collections.singletonMap("input", tensor));
-
-
-
-                    String[] saida = (String[]) result.get(0).getValue();
-
-
-
-                    textView.setText(saida[0]);
-
-
-
-
-                    tensor.close();
-                    result.close();
-                    session.close();
-
-                }
-        });*/
-
+            }
+        });
     }
 
-    private Bitmap uriParaBitmap(Uri uri) {
+    private void capturarFoto() {
+        if (imageCapture != null) {
+            imageCapture.takePicture(ContextCompat.getMainExecutor(this), new ImageCapture.OnImageCapturedCallback() {
+                @Override
+                public void onCaptureSuccess(@NonNull ImageProxy image) {
+                    Bitmap bitmap = getBitmap(image);
+                    processarImagem(bitmap);
+                    image.close();
+                }
+                @Override
+                public void onError(@NonNull ImageCaptureException exception) {
+                    Log.e("CameraX", "Erro ao capturar foto: " + exception.getMessage());
+                }
+            });
+        }
+    }
+
+    private Bitmap getBitmap(ImageProxy image) {
+        byte[] bytes = convertImageToByteArray(image);
+        return BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
+    }
+    private byte[] convertImageToByteArray(ImageProxy image) {
+        ByteBuffer buffer = image.getPlanes()[0].getBuffer();
+        byte[] bytes = new byte[buffer.remaining()];
+        buffer.get(bytes);
+        return bytes;
+    }
+
+    private void processarImagem(Bitmap bitmap) {
+        MPImage mpImg = new BitmapImageBuilder(bitmap).build();
+        HandLandmarkerResult resultado = handLandmark.detect(mpImg);
+        float[] lista = new float[42];
+        int x = 0;
+        if (!resultado.landmarks().isEmpty()) {
+            for (List<NormalizedLandmark> l : resultado.landmarks()) {
+                for (NormalizedLandmark landmark : l) {
+                    lista[x++] = landmark.x();
+                    lista[x++] = landmark.y();
+                }
+            }
+        }
+
         try {
-            Bitmap bitmap;
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                ImageDecoder.Source source = ImageDecoder.createSource(getContentResolver(), uri);
-                bitmap = ImageDecoder.decodeBitmap(source);
-            } else {
-                bitmap = MediaStore.Images.Media.getBitmap(getContentResolver(), uri);
-            }
-            if (bitmap != null && bitmap.getConfig() != Bitmap.Config.ARGB_8888) {
-                bitmap = bitmap.copy(Bitmap.Config.ARGB_8888, true);
-            }
-            return bitmap;
-        } catch (IOException e) {
-            Log.e("ImageError", "Erro ao converter URI para Bitmap", e);
-            return null;
+            OrtSession session = ortEnvironment.createSession(modelBuffer, sessionOptions);
+            OnnxTensor tensor = OnnxTensor.createTensor(ortEnvironment, FloatBuffer.wrap(lista), new long[]{1, 42});
+            OrtSession.Result result = session.run(Collections.singletonMap("input", tensor));
+            String[] p = (String[]) result.get(0).getValue();
+            textView.setText(p[0]);
+            tensor.close();
+            result.close();
+            session.close();
+        } catch (Exception e) {
+            Log.e("ONNX", "Erro ao processar o modelo", e);
         }
     }
 
     private ByteBuffer loadModelFile(String caminho) throws IOException {
         InputStream inputStream = getAssets().open(caminho);
-
         byte[] modelBytes = new byte[inputStream.available()];
         inputStream.read(modelBytes);
         inputStream.close();
         ByteBuffer byteBuffer = ByteBuffer.allocateDirect(modelBytes.length);
         byteBuffer.put(modelBytes);
         byteBuffer.rewind();
-
         return byteBuffer;
     }
-    private void bindPreview(@NonNull ProcessCameraProvider processCameraProvider){
-        Preview preview = new Preview.Builder()
-                .build();
-        CameraSelector cameraSelector = new CameraSelector.Builder()
-                .requireLensFacing(CameraSelector.LENS_FACING_BACK)
-                .build();
-        preview.setSurfaceProvider(previewView.getSurfaceProvider());
-        Camera camera = (Camera) processCameraProvider.bindToLifecycle((LifecycleOwner)this, cameraSelector, preview);
-    }
 
+    private void startCamera(int cameraFacing) {
+        ListenableFuture<ProcessCameraProvider> cameraProviderFuture = ProcessCameraProvider.getInstance(this);
+        cameraProviderFuture.addListener(() -> {
+            try {
+                ProcessCameraProvider cameraProvider = cameraProviderFuture.get();
+                Preview preview = new Preview.Builder().build();
+                imageCapture = new ImageCapture.Builder().build();
+                CameraSelector cameraSelector = new CameraSelector.Builder().requireLensFacing(cameraFacing).build();
+                cameraProvider.unbindAll();
+                cameraProvider.bindToLifecycle((LifecycleOwner) this, cameraSelector, preview, imageCapture);
+                preview.setSurfaceProvider(previewView.getSurfaceProvider());
+            } catch (ExecutionException | InterruptedException e) {
+                Log.e("CameraX", "Erro ao iniciar a câmera", e);
+            }
+        }, ContextCompat.getMainExecutor(this));
+    }
 }
