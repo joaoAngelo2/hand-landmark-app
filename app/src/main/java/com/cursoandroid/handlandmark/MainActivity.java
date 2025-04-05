@@ -5,6 +5,7 @@ import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.os.Bundle;
+import android.os.Handler;
 import android.util.Log;
 import android.view.View;
 import android.widget.ImageButton;
@@ -20,6 +21,9 @@ import androidx.camera.lifecycle.ProcessCameraProvider;
 import androidx.camera.view.PreviewView;
 import androidx.core.content.ContextCompat;
 import androidx.lifecycle.LifecycleOwner;
+import androidx.viewbinding.ViewBinding;
+
+import com.cursoandroid.handlandmark.databinding.ActivityMainBinding;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.mediapipe.framework.image.BitmapImageBuilder;
 import com.google.mediapipe.framework.image.MPImage;
@@ -40,7 +44,7 @@ import ai.onnxruntime.*;
 
 public class MainActivity extends AppCompatActivity {
 
-    private ImageButton tirarFoto, flash, virarCamera;
+    private ImageButton  flash, virarCamera;
     private TextView textView;
     private PreviewView previewView;
     private int cameraFacing = CameraSelector.LENS_FACING_BACK;
@@ -57,6 +61,8 @@ public class MainActivity extends AppCompatActivity {
             .setMinHandPresenceConfidence(0.55f)
             .setRunningMode(RunningMode.IMAGE)
             .build();
+    private Handler handler;
+    private Runnable runnable;
 
     private final ActivityResultLauncher<String> activityResultLauncher = registerForActivityResult(
             new ActivityResultContracts.RequestPermission(),
@@ -78,7 +84,6 @@ public class MainActivity extends AppCompatActivity {
         setContentView(R.layout.activity_main);
 
         previewView = findViewById(R.id.previewView);
-        tirarFoto = findViewById(R.id.tirar_foto);
         flash = findViewById(R.id.flash);
         virarCamera = findViewById(R.id.virar_camera);
         textView = findViewById(R.id.textView);
@@ -99,18 +104,25 @@ public class MainActivity extends AppCompatActivity {
         try {
             ortEnvironment = OrtEnvironment.getEnvironment();
             sessionOptions = new OrtSession.SessionOptions();
-            modelBuffer = loadModelFile("modelo_rf.onnx");
+            modelBuffer = loadModelFile("modelo_gestos.onnx");
         } catch (IOException e) {
             Log.e("ONNX", "Erro ao carregar o modelo", e);
             return;
         }
 
-        tirarFoto.setOnClickListener(v -> capturarFoto());
+        handler = new Handler();
+        runnable = new Runnable() {
+            @Override
+            public void run() {
+                capturarFoto();
+                handler.postDelayed(runnable, 50);
+            }
+        };
+        runnable.run();
 
         flash.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-
             }
         });
     }
@@ -162,7 +174,10 @@ public class MainActivity extends AppCompatActivity {
             OnnxTensor tensor = OnnxTensor.createTensor(ortEnvironment, FloatBuffer.wrap(lista), new long[]{1, 42});
             OrtSession.Result result = session.run(Collections.singletonMap("input", tensor));
             String[] p = (String[]) result.get(0).getValue();
-            textView.setText(p[0]);
+            runOnUiThread(() ->
+                    textView.setText(p[0])
+            );
+
             tensor.close();
             result.close();
             session.close();
@@ -191,6 +206,7 @@ public class MainActivity extends AppCompatActivity {
                 imageCapture = new ImageCapture.Builder().build();
                 CameraSelector cameraSelector = new CameraSelector.Builder().requireLensFacing(cameraFacing).build();
                 cameraProvider.unbindAll();
+                Log.d("info camera",""+cameraProvider.getCameraInfo(cameraSelector));
                 cameraProvider.bindToLifecycle((LifecycleOwner) this, cameraSelector, preview, imageCapture);
                 preview.setSurfaceProvider(previewView.getSurfaceProvider());
             } catch (ExecutionException | InterruptedException e) {
